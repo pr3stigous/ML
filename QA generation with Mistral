@@ -1,0 +1,118 @@
+# this code was used to run in google colab
+# it allows for Q&A generation from a text file using Mistral instruct v3
+
+!pip install transformers
+!pip install sentencepiece
+!pip install torch
+!pip install tokenizers
+!pip install datasets
+!pip install mistral_inference
+!pip install tqdm
+
+import json
+import torch
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoModelForCausalLM
+from datasets import load_dataset
+from huggingface_hub import snapshot_download
+from pathlib import Path
+from tqdm import tqdm
+from mistral_inference.model import Transformer
+from mistral_inference.generate import generate
+from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+from mistral_common.protocol.instruct.messages import UserMessage
+from mistral_common.protocol.instruct.request import ChatCompletionRequest
+from mistral_common.protocol.instruct.tool_calls import Function, Tool
+from google.colab import drive
+
+from huggingface_hub import login
+login(token="") # you need to create a token in huggingface and plug it in here
+
+# Mount Google Drive
+drive.mount('/content/drive')
+
+# Define your prompts
+
+prompts = {
+    
+}
+
+mistral_models_path = Path.home().joinpath('mistral_models', '7B-Instruct-v0.3')
+mistral_models_path.mkdir(parents=True, exist_ok=True)
+
+snapshot_download(repo_id="mistralai/Mistral-7B-Instruct-v0.3", allow_patterns=["params.json", "consolidated.safetensors", "tokenizer.model.v3"], local_dir=mistral_models_path)
+
+# Instantiate the tokenizer and model
+tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+model = AutoModelForCausalLM.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+
+# Load your document from a text file
+with open('yourtextfile.txt', 'r') as file:
+    document = file.read()
+
+# Parameters
+chunk_size = 512  # Adjust as needed
+overlap = 128  # Adjust as needed
+num_questions = 5  # Adjust as needed
+use_all_prompts = False  # Set to False if you want to use a single prompt
+selected_prompt = "your prompt from above"  # Set the prompt you want to use if not using all
+
+# Function to chunk the document based on tokens
+def chunk_document(doc, chunk_size, overlap):
+    tokens = tokenizer(doc, return_tensors='pt')['input_ids'][0]
+    chunks = []
+    for i in range(0, len(tokens), chunk_size - overlap):
+        chunks.append(tokens[i:i + chunk_size])
+    return chunks
+
+# Chunk the document
+document_chunks = chunk_document(document, chunk_size, overlap)
+
+# Function to generate QA pairs using the model
+def generate_qa_pairs(prompt_template, document_chunk, num_questions):
+    chunk_text = tokenizer.decode(document_chunk, skip_special_tokens=True)
+    prompt = prompt_template.replace("{{document_chunk}}", chunk_text)
+    input_ids = tokenizer(prompt, return_tensors='pt')['input_ids']
+
+    # Enable sampling for multiple sequence generation
+    outputs = model.generate(
+        input_ids,
+        max_length=1024,
+        num_return_sequences=num_questions,
+        do_sample=True  # Enable sampling
+    )
+
+    qa_pairs = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+    return qa_pairs
+
+# Generate QA pairs
+all_qa_pairs = {}
+
+# Wrap the outer loop with tqdm to show progress
+for chunk in tqdm(document_chunks, desc="Processing chunks"):
+    if use_all_prompts:
+        for prompt_name, prompt_template in prompts.items():
+            qa_pairs = generate_qa_pairs(prompt_template, chunk, num_questions)
+            if prompt_name not in all_qa_pairs:
+                all_qa_pairs[prompt_name] = []
+            all_qa_pairs[prompt_name].extend(qa_pairs)
+    else:
+        qa_pairs = generate_qa_pairs(prompts[selected_prompt], chunk, num_questions)
+        if selected_prompt not in all_qa_pairs:
+            all_qa_pairs[selected_prompt] = []
+        all_qa_pairs[selected_prompt].extend(qa_pairs)
+
+# Save the generated QA pairs to a JSON file
+with open('youroutput.json', 'w') as outfile:
+    json.dump(all_qa_pairs, outfile, indent=2)
+
+print("QA pairs have been saved to youroutput.json")
+
+# Define the path to save the file in Google Drive
+output_path = '/content/drive/My Drive/youroutput.json'
+
+# Save the generated QA pairs to a JSON file in Google Drive
+with open(output_path, 'w') as outfile:
+    json.dump(all_qa_pairs, outfile, indent=2)
+
+print(f"QA pairs have been saved to {output_path}")
+
