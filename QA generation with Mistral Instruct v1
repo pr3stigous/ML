@@ -1,5 +1,5 @@
 # the code below was run on google colab
-# it allows for Question and Answer generation from a text file
+# it allows for Question and Answer generation from a text file using Mistral Instruct v1
 # convert your document to a text file > create your prompts
 
 
