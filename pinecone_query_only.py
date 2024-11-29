@@ -1,9 +1,10 @@
 """
-this code is to query a pinecone database in google colab
-this code also connects to a db to extract supporting metadata for retrieved vectors
+this code is to query a pinecone database
 changes to make for v2:
--also print out the retrieved vector in natural language, 
+-also print out the retrieved vector in natural language,
 not just the numerical representation
+changes to make for v3:
+-
 """
 
 !pip install transformers
@@ -44,7 +45,22 @@ def get_embedding(text):
     with torch.no_grad():
         outputs = MODEL(**inputs)
     embeddings = outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
-    return embeddings.tolist()
+    return embeddings.tolist()  # Convert numpy array to list
+
+def decode_vector(vector):
+    """
+    Decode a vector back into text using the model's tokenizer.
+    """
+    # Convert the vector to a tensor and reshape it
+    tensor = torch.tensor(vector).unsqueeze(0).to('cuda')
+    
+    # Use the model to generate text from the vector
+    with torch.no_grad():
+        outputs = MODEL.generate(inputs_embeds=tensor, max_length=100)
+    
+    # Decode the generated tokens back to text
+    decoded_text = TOKENIZER.decode(outputs[0], skip_special_tokens=True)
+    return decoded_text
 
 def query_pinecone(query_vector, top_k=5):
     """
@@ -66,9 +82,6 @@ def get_url_from_sqlite(hash_value):
     return result[0] if result else None
 
 def process_query(query_text, top_k=5):
-    """
-    Process a query and return relevant results with associated URLs.
-    """
     query_vector = get_embedding(query_text)
     results = query_pinecone(query_vector, top_k)
 
@@ -83,7 +96,8 @@ def process_query(query_text, top_k=5):
                 'id': match['id'],
                 'score': match['score'],
                 'metadata': match['metadata'],
-                'url': url
+                'url': url,
+                'text': match['metadata'].get('window', 'No text available')  # Changed 'text' to 'window'
             })
 
     return processed_results
@@ -96,10 +110,13 @@ while True:
 
     results = process_query(query_text)
 
+    print(f"Query Text: {query_text}")
+    print("---")
+
     for result in results:
         print(f"ID: {result['id']}")
         print(f"Score: {result['score']}")
         print(f"Metadata: {result['metadata']}")
         print(f"URL: {result['url']}")
+        print(f"Text: {result['text']}")
         print("---")
-
