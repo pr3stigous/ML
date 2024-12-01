@@ -1,21 +1,30 @@
+# -*- coding: utf-8 -*-
 """
-this code is to query a pinecone database
-changes to make for v2:
+this code is to query a pinecone database in google colab
+it integrates with a sqlite database during retrieval process to provide additional metadata (weblink)
+v2 changes:
 -also print out the retrieved vector in natural language,
 not just the numerical representation
-changes to make for v3:
+v3 changes:
+-v2 version did not have a query prompt built in
+v4 changes:
+-used sonnets recommendation after feeding it embedding documentation
+v5 changes:
 -
 """
 
 !pip install transformers
 !pip install torch
 !pip install pinecone-client
+!pip install scikit-learn
 
 import sqlite3
 import torch
+import numpy as np
 from transformers import AutoModel, AutoTokenizer
 from getpass import getpass
 from pinecone import Pinecone
+from sklearn.preprocessing import normalize
 
 # Initialize SQLite connection
 db_name = 'data2.sqlite'  # Replace with your actual database name if different
@@ -27,7 +36,7 @@ api_key = getpass("Enter your Pinecone API key: ")
 pc = Pinecone(api_key=api_key)
 
 # Connect to the Pinecone index
-index_name = "tester"
+index_name = "tester3"
 index = pc.Index(index_name)
 
 # Initialize model and tokenizer
@@ -37,15 +46,27 @@ MODEL = AutoModel.from_pretrained(MODEL_DIR).cuda().eval()
 TOKENIZER = AutoTokenizer.from_pretrained(MODEL_DIR)
 print("Model and tokenizer initialized.")
 
-def get_embedding(text):
+# Add the linear layer to the model
+vector_dim = 1536
+MODEL.vector_linear = torch.nn.Linear(in_features=MODEL.config.hidden_size, out_features=vector_dim).cuda()
+
+def get_embedding(text, is_query=False):
     """
     Generate embedding for the given text using the initialized model.
+    If is_query is True, prepend the query prompt.
     """
+    query_prompt = "Instruct: Retrieve semantically similar text.\nQuery: "
+    if is_query:
+        text = query_prompt + text
+
     inputs = TOKENIZER(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to('cuda')
     with torch.no_grad():
-        outputs = MODEL(**inputs)
-    embeddings = outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
-    return embeddings.tolist()  # Convert numpy array to list
+        attention_mask = inputs["attention_mask"]
+        last_hidden_state = MODEL(**inputs)[0]
+        last_hidden = last_hidden_state.masked_fill(~attention_mask[..., None].bool(), 0.0)
+        embeddings = last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+        embeddings = normalize(MODEL.vector_linear(embeddings).cpu().numpy())
+    return embeddings[0].tolist()  # Convert numpy array to list
 
 def decode_vector(vector):
     """
@@ -53,11 +74,11 @@ def decode_vector(vector):
     """
     # Convert the vector to a tensor and reshape it
     tensor = torch.tensor(vector).unsqueeze(0).to('cuda')
-    
+
     # Use the model to generate text from the vector
     with torch.no_grad():
         outputs = MODEL.generate(inputs_embeds=tensor, max_length=100)
-    
+
     # Decode the generated tokens back to text
     decoded_text = TOKENIZER.decode(outputs[0], skip_special_tokens=True)
     return decoded_text
@@ -82,7 +103,7 @@ def get_url_from_sqlite(hash_value):
     return result[0] if result else None
 
 def process_query(query_text, top_k=5):
-    query_vector = get_embedding(query_text)
+    query_vector = get_embedding(query_text, is_query=True)
     results = query_pinecone(query_vector, top_k)
 
     processed_results = []
@@ -97,7 +118,7 @@ def process_query(query_text, top_k=5):
                 'score': match['score'],
                 'metadata': match['metadata'],
                 'url': url,
-                'text': match['metadata'].get('window', 'No text available')  # Changed 'text' to 'window'
+                'text': match['metadata'].get('window', 'No text available')
             })
 
     return processed_results
@@ -120,3 +141,6 @@ while True:
         print(f"URL: {result['url']}")
         print(f"Text: {result['text']}")
         print("---")
+
+
+
