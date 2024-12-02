@@ -2,6 +2,7 @@
 """
 this code is to query a pinecone database in google colab
 it integrates with a sqlite database during retrieval process to provide additional metadata (weblink)
+this code uses stella as an embedding model
 v2 changes:
 -also print out the retrieved vector in natural language,
 not just the numerical representation
